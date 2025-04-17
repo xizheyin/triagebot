@@ -1076,6 +1076,62 @@ impl Issue {
             .await?;
         Ok(())
     }
+
+    /// Returns the number of commits this PR is behind the base branch.
+    /// 
+    /// Returns `None` if this is not a PR or if getting the comparison fails.
+    pub async fn commits_behind_base(&self, client: &GithubClient) -> anyhow::Result<Option<u32>> {
+        if !self.is_pr() {
+            return Ok(None);
+        }
+
+        let Some(base) = &self.base else {
+            return Ok(None);
+        };
+
+        let Some(head) = &self.head else {
+            return Ok(None);
+        };
+
+        let repo = self.repository();
+        
+        // head ref is something like `username:branch-name`
+        let head_label = &head.label;
+        // base label is `rust-lang:master``
+        let base_label = &base.label;
+        
+        // Get the comparison between the PR and the base branch
+        // https://api.github.com/repos/username/repo/compare/base-branch...pr-branch
+        let comparison_url = format!(
+            "{}/compare/{}...{}",
+            repo.url(client),
+            base_label,
+            head_label,
+        );
+        
+        log::debug!("Getting comparison between {} and {} for PR #{}", 
+                   head_label, 
+                   base_label,
+                   self.number);
+        
+        let req = client.get(&comparison_url);
+        let comparison: serde_json::Value = match client.json(req).await {
+            Ok(result) => result,
+            Err(e) => {
+                log::error!("Failed to get comparison data for PR #{}: {}", self.number, e);
+                return Ok(None);
+            }
+        };
+        
+        let behind_by = comparison["behind_by"].as_u64().unwrap_or(0) as u32;
+        
+        log::debug!("PR #{} is {} commits behind {}", 
+                   self.number, 
+                   behind_by, 
+                   base_label);
+        
+        Ok(Some(behind_by))
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1215,6 +1271,7 @@ struct PullRequestEventFields {}
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct CommitBase {
+    pub label: String,
     pub sha: String,
     #[serde(rename = "ref")]
     pub git_ref: String,

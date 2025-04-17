@@ -10,3 +10,6 @@ message = """\
 This is just testing some functionality, please ignore this ping.
 """
 label = "help wanted"
+
+[pr-behind-commits]
+threshold = 100

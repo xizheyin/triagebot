@@ -49,6 +49,7 @@ pub(crate) struct Config {
     #[serde(alias = "canonicalize-issue-links")]
     pub(crate) issue_links: Option<IssueLinksConfig>,
     pub(crate) no_mentions: Option<NoMentionsConfig>,
+    pub(crate) pr_behind_commits: Option<PRBehindCommitsConfig>,
 }
 
 #[derive(PartialEq, Eq, Debug, serde::Deserialize)]
@@ -427,6 +428,15 @@ pub(crate) struct IssueLinksConfig {}
 #[serde(deny_unknown_fields)]
 pub(crate) struct NoMentionsConfig {}
 
+/// Configuration for PR behind commits checks
+#[derive(PartialEq, Eq, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PRBehindCommitsConfig {
+    /// The threshold of commits behind master to trigger a warning.
+    /// Default is 100 if not specified.
+    pub(crate) threshold: Option<u32>,
+}
+
 fn get_cached_config(repo: &str) -> Option<Result<Arc<Config>, ConfigurationError>> {
     let cache = CONFIG_CACHE.read().unwrap();
     cache.get(repo).and_then(|(config, fetch_time)| {
@@ -618,6 +628,7 @@ mod tests {
                 }),
                 issue_links: Some(IssueLinksConfig {}),
                 no_mentions: Some(NoMentionsConfig {}),
+                pr_behind_commits: None,
             }
         );
     }
@@ -685,6 +696,7 @@ mod tests {
                 rendered_link: None,
                 issue_links: Some(IssueLinksConfig {}),
                 no_mentions: None,
+                pr_behind_commits: None,
             }
         );
     }
