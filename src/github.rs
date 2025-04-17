@@ -4,6 +4,7 @@ use bytes::Bytes;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::{future::BoxFuture, FutureExt, TryStreamExt};
 use hyper::header::HeaderValue;
+use octocrab::models::commits::CommitComparison;
 use octocrab::params::pulls::Sort;
 use octocrab::params::{Direction, State};
 use octocrab::Octocrab;
@@ -1077,68 +1078,50 @@ impl Issue {
         Ok(())
     }
 
-    /// Returns the number of commits this PR is behind the base branch.
+    /// Returns the comparison between the PR and the base branch.
+    /// `BranchComparison::commits` are commits behind the base branch.
     ///
     /// Returns `None` if this is not a PR or if getting the comparison fails.
-    pub async fn commits_behind_base(&self, client: &GithubClient) -> anyhow::Result<Option<u32>> {
-        if !self.is_pr() {
-            return Ok(None);
-        }
+    pub async fn branch_comparison(
+        &self,
+        client: &GithubClient,
+    ) -> anyhow::Result<BranchComparison> {
+        let repo_info = match client.repository(&self.repository().full_repo_name()).await {
+            Ok(repo) => repo,
+            Err(e) => {
+                log::error!(
+                    "Error getting repository info for PR #{}: {}",
+                    self.number,
+                    e
+                );
+                return Err(e);
+            }
+        };
 
         let Some(base) = &self.base else {
-            return Ok(None);
+            return Err(anyhow::anyhow!(
+                "No base branch found for PR #{}",
+                self.number
+            ));
         };
 
         let Some(head) = &self.head else {
-            return Ok(None);
+            return Err(anyhow::anyhow!(
+                "No head branch found for PR #{}",
+                self.number
+            ));
         };
-
-        let repo = self.repository();
 
         // head ref is something like `username:branch-name`
         let head_label = &head.label;
         // base label is `rust-lang:master``
         let base_label = &base.label;
 
-        // Get the comparison between the PR and the base branch
-        // https://api.github.com/repos/username/repo/compare/base-branch...pr-branch
-        let comparison_url = format!(
-            "{}/compare/{}...{}",
-            repo.url(client),
-            base_label,
-            head_label,
-        );
+        let comparison = repo_info
+            .compare_branches(client, base_label, head_label)
+            .await?;
 
-        log::debug!(
-            "Getting comparison between {} and {} for PR #{}",
-            head_label,
-            base_label,
-            self.number
-        );
-
-        let req = client.get(&comparison_url);
-        let comparison: serde_json::Value = match client.json(req).await {
-            Ok(result) => result,
-            Err(e) => {
-                log::error!(
-                    "Failed to get comparison data for PR #{}: {}",
-                    self.number,
-                    e
-                );
-                return Ok(None);
-            }
-        };
-
-        let behind_by = comparison["behind_by"].as_u64().unwrap_or(0) as u32;
-
-        log::debug!(
-            "PR #{} is {} commits behind {}",
-            self.number,
-            behind_by,
-            base_label
-        );
-
-        Ok(Some(behind_by))
+        Ok(comparison)
     }
 }
 
@@ -2042,6 +2025,28 @@ impl Repository {
             .json(client.get(&url))
             .await
             .with_context(|| format!("{} failed to get pulls for commit {sha}", self.full_name))
+    }
+
+    /// Compare two branches, possibly across repositories
+    ///
+    /// Format for head and base:
+    ///   - For same repo: "branch_name"
+    ///   - For different repo: "owner:branch_name"
+    ///
+    /// Example: compare_branches(client, "main", "user:feature-branch").await
+    /// This will compare user:feature-branch against the main branch of the current repo
+    /// Note: GitHub API has a limit of 250 commits per page. So, we fetch **one** page is enough
+    pub async fn compare_branches(
+        &self,
+        client: &GithubClient,
+        base: &str,
+        head: &str,
+    ) -> anyhow::Result<BranchComparison> {
+        let url = format!("{}/compare/{}...{}", self.url(client), base, head);
+        client
+            .json(client.get(&url))
+            .await
+            .with_context(|| format!("Failed to compare branches: {} vs {}", base, head))
     }
 }
 
@@ -3269,6 +3274,23 @@ impl Submodule {
             })?;
         client.repository(fullname).await
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BranchComparison {
+    pub url: String,
+    pub html_url: String,
+    pub permalink_url: String,
+    pub diff_url: String,
+    pub patch_url: String,
+    pub base_commit: GithubCommit,
+    pub merge_base_commit: GithubCommit,
+    pub status: String,
+    pub ahead_by: u32,
+    pub behind_by: u32,
+    pub total_commits: u32,
+    pub commits: Vec<GithubCommit>,
+    pub files: Option<Vec<PullRequestFile>>,
 }
 
 #[cfg(test)]
