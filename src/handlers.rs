@@ -27,7 +27,6 @@ impl fmt::Display for HandlerError {
 mod assign;
 mod autolabel;
 mod bot_pull_requests;
-mod pr_behind_commits;
 mod check_commits;
 mod close;
 pub mod docs_update;
@@ -43,6 +42,7 @@ mod note;
 mod notification;
 mod notify_zulip;
 mod ping;
+mod pr_behind_commits;
 pub mod pr_tracking;
 mod prioritize;
 pub mod project_goals;
