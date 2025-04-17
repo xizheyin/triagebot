@@ -42,7 +42,6 @@ mod note;
 mod notification;
 mod notify_zulip;
 mod ping;
-mod pr_behind_commits;
 pub mod pr_tracking;
 mod prioritize;
 pub mod project_goals;
@@ -180,20 +179,6 @@ pub async fn handle(ctx: &Context, event: &Event) -> Vec<HandlerError> {
         if let Err(e) = merge_conflicts::handle(ctx, event, conflict_config).await {
             log::error!(
                 "failed to process event {:?} with merge_conflicts handler: {:?}",
-                event,
-                e
-            );
-        }
-    }
-
-    if let Some(pr_behind_commits_config) = config
-        .as_ref()
-        .ok()
-        .and_then(|c| c.pr_behind_commits.as_ref())
-    {
-        if let Err(e) = pr_behind_commits::handle(ctx, event, pr_behind_commits_config).await {
-            log::error!(
-                "failed to process event {:?} with pr_behind_commits handler: {:?}",
                 event,
                 e
             );

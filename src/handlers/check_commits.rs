@@ -13,6 +13,7 @@ use crate::{
 #[cfg(test)]
 use crate::github::GithubCommit;
 
+mod behind_master;
 mod issue_links;
 mod modified_submodule;
 mod no_mentions;
@@ -90,6 +91,16 @@ pub(super) async fn handle(ctx: &Context, event: &Event, config: &Config) -> any
         {
             warnings.push(warn.0);
             labels.extend(warn.1);
+        }
+    }
+
+    // Check if PR is behind master branch by a significant number of commits
+    if let Some(commits_behind_master) = &config.commits_behind_master {
+        let threshold = commits_behind_master
+            .threshold
+            .unwrap_or(behind_master::DEFAULT_BEHIND_THRESHOLD);
+        if let Some(warning) = behind_master::behind_master(threshold, event, &ctx.github).await {
+            warnings.push(warning);
         }
     }
 
