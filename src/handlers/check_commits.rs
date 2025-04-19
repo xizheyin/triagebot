@@ -95,11 +95,23 @@ pub(super) async fn handle(ctx: &Context, event: &Event, config: &Config) -> any
     }
 
     // Check if PR is behind master branch by a significant number of commits
-    if let Some(commits_behind_master) = &config.commits_behind_master {
-        let threshold = commits_behind_master
-            .threshold
-            .unwrap_or(behind_master::DEFAULT_BEHIND_THRESHOLD);
-        if let Some(warning) = behind_master::behind_master(threshold, event, &ctx.github).await {
+    if let Some(behind_master) = &config.behind_master {
+        let commits_behind_threshold = behind_master
+            .commits_behind_threshold
+            .unwrap_or(behind_master::DEFAULT_COMMITS_BEHIND_THRESHOLD);
+
+        let parent_age_threshold = behind_master
+            .parent_age_threshold
+            .unwrap_or(behind_master::DEFAULT_PARENT_AGE_THRESHOLD);
+
+        if let Some(warning) = behind_master::behind_master(
+            parent_age_threshold,
+            commits_behind_threshold,
+            event,
+            &ctx.github,
+        )
+        .await
+        {
             warnings.push(warning);
         }
     }

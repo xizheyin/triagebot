@@ -49,7 +49,7 @@ pub(crate) struct Config {
     #[serde(alias = "canonicalize-issue-links")]
     pub(crate) issue_links: Option<IssueLinksConfig>,
     pub(crate) no_mentions: Option<NoMentionsConfig>,
-    pub(crate) commits_behind_master: Option<CommitsBehindMasterConfig>,
+    pub(crate) behind_master: Option<BehindMasterConfig>,
 }
 
 #[derive(PartialEq, Eq, Debug, serde::Deserialize)]
@@ -431,10 +431,14 @@ pub(crate) struct NoMentionsConfig {}
 /// Configuration for PR behind commits checks
 #[derive(PartialEq, Eq, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CommitsBehindMasterConfig {
+pub(crate) struct BehindMasterConfig {
     /// The threshold of commits behind master to trigger a warning.
     /// Default is 100 if not specified.
-    pub(crate) threshold: Option<u32>,
+    pub(crate) commits_behind_threshold: Option<usize>,
+
+    /// The threshold of days for parent commit age to trigger a warning.
+    /// Default is 14 days if not specified.
+    pub(crate) parent_age_threshold: Option<usize>,
 }
 
 fn get_cached_config(repo: &str) -> Option<Result<Arc<Config>, ConfigurationError>> {
@@ -628,7 +632,7 @@ mod tests {
                 }),
                 issue_links: Some(IssueLinksConfig {}),
                 no_mentions: Some(NoMentionsConfig {}),
-                commits_behind_master: None,
+                behind_master: None,
             }
         );
     }
@@ -696,7 +700,7 @@ mod tests {
                 rendered_link: None,
                 issue_links: Some(IssueLinksConfig {}),
                 no_mentions: None,
-                commits_behind_master: None,
+                behind_master: None,
             }
         );
     }

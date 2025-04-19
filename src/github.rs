@@ -4,7 +4,6 @@ use bytes::Bytes;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::{future::BoxFuture, FutureExt, TryStreamExt};
 use hyper::header::HeaderValue;
-use octocrab::models::commits::CommitComparison;
 use octocrab::params::pulls::Sort;
 use octocrab::params::{Direction, State};
 use octocrab::Octocrab;
@@ -1122,6 +1121,80 @@ impl Issue {
             .await?;
 
         Ok(comparison)
+    }
+
+    /// Checks if the PR's parent commit is too old.
+    ///
+    /// This determines if a PR needs updating by examining the first parent of the PR's head commit,
+    /// which typically represents the base branch commit that the PR is based on.
+    ///
+    /// If this parent commit is older than the specified threshold, it suggests the PR
+    /// should be updated/rebased to a more recent version of the base branch.
+    ///
+    /// Returns:
+    /// - Ok(Some(days_old)) - If parent commit is older than the threshold
+    /// - Ok(None) - If not a PR, can't get commit details, or parent is within threshold
+    /// - Err(...) - If an error occurred during processing
+    pub async fn is_parent_commit_too_old(
+        &self,
+        client: &GithubClient,
+        max_days_old: usize,
+    ) -> anyhow::Result<Option<usize>> {
+        if !self.is_pr() {
+            return Ok(None);
+        }
+
+        // Get the head commit SHA
+        let Some(head) = &self.head else {
+            return Ok(None);
+        };
+
+        // Get the commit details
+        let commit_url = format!("{}/commits/{}", head.repo.url(client), head.sha);
+        let commit: GithubCommit = match client.json(client.get(&commit_url)).await {
+            Ok(commit) => commit,
+            Err(e) => {
+                log::warn!(
+                    "Failed to get commit details for PR #{}: {}",
+                    self.number,
+                    e
+                );
+                return Ok(None);
+            }
+        };
+
+        // Get the first parent (it should be from the base branch)
+        if commit.parents.is_empty() {
+            return Ok(None);
+        }
+
+        // The first parent should be from the base branch
+        let parent_sha = &commit.parents[0].sha;
+
+        // Get the parent commit details to check its date
+        let parent_url = format!("{}/commits/{}", head.repo.url(client), parent_sha);
+        let parent_commit: GithubCommit = match client.json(client.get(&parent_url)).await {
+            Ok(commit) => commit,
+            Err(e) => {
+                log::warn!(
+                    "Failed to get parent commit details for PR #{}: {}",
+                    self.number,
+                    e
+                );
+                return Ok(None);
+            }
+        };
+
+        // Check if the parent commit is too old
+        let parent_date = parent_commit.commit.author.date;
+        let now = chrono::Utc::now().with_timezone(&parent_date.timezone());
+        let days_old = (now - parent_date).num_days() as usize;
+
+        if days_old > max_days_old {
+            Ok(Some(days_old))
+        } else {
+            Ok(None)
+        }
     }
 }
 

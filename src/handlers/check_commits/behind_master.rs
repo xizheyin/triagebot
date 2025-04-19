@@ -2,11 +2,16 @@ use crate::github::{GithubClient, IssuesEvent};
 use tracing as log;
 
 /// Default threshold for the number of commits behind master to trigger a warning
-pub const DEFAULT_BEHIND_THRESHOLD: u32 = 100;
+pub const DEFAULT_COMMITS_BEHIND_THRESHOLD: usize = 100;
+
+/// Default threshold for parent commit age in days to trigger a warning
+pub const DEFAULT_PARENT_AGE_THRESHOLD: usize = 14;
 
 /// Check if the PR is behind the main branch by a significant number of commits
+/// or based on an old parent commit
 pub async fn behind_master(
-    threshold: u32,
+    age_threshold: usize,
+    merge_commits_threshold: usize,
     event: &IssuesEvent,
     client: &GithubClient,
 ) -> Option<String> {
@@ -32,6 +37,45 @@ pub async fn behind_master(
         }
     };
 
+    // First try the parent commit age check as it's more accurate
+    match event
+        .issue
+        .is_parent_commit_too_old(client, age_threshold)
+        .await
+    {
+        Ok(Some(days_old)) => {
+            log::info!(
+                "PR #{} has a parent commit that is {} days old",
+                event.issue.number,
+                days_old
+            );
+
+            return Some(format!(
+                "This PR is based on a commit that is {} days old. \
+It's recommended to update your branch according to the \
+[Rustc Dev Guide](https://rustc-dev-guide.rust-lang.org/contributing.html#keeping-your-branch-up-to-date).",
+                days_old
+            ));
+        }
+        Ok(None) => {
+            // Parent commit is not too old, continue with the commit count check
+            log::debug!(
+                "PR #{} parent commit is not too old, checking commit count",
+                event.issue.number
+            );
+        }
+        Err(e) => {
+            // Error checking parent commit age, log and fall back to commit count
+            log::error!(
+                "Error checking parent commit age for PR #{}: {}",
+                event.issue.number,
+                e
+            );
+        }
+    }
+
+    // Fall back to the commit count method
+    // check only auto-merge and rollup-merge commits
     let comparison = match event.issue.branch_comparison(client).await {
         Ok(comparison) => comparison,
         Err(e) => {
@@ -45,21 +89,21 @@ pub async fn behind_master(
     };
 
     // Total commits behind master
-    let total_behind_by = comparison.behind_by;
+    let total_behind_by = comparison.behind_by as usize;
 
-    // If we're not behind by much, no need to filter commits to make the check faster
-    if total_behind_by < threshold {
+    // First check if we're not totaly behind by much, no need to filter commits to make the check faster
+    if total_behind_by < merge_commits_threshold {
         return None;
     }
 
     log::debug!(
-        "PR #{} is {} commits behind {}. Filtering auto-merge and rollup-merge commits...",
+        "PR #{} is {} commits behind {}. Counting auto-merge and rollup-merge commits...",
         event.issue.number,
         total_behind_by,
         repo_info.default_branch
     );
 
-    // Filter out auto-merge and rollup commits
+    // Count only auto-merge and rollup commits
     let mut auto_merge_commits = Vec::new();
     let mut rollup_merge_commits = Vec::new();
 
@@ -72,15 +116,12 @@ pub async fn behind_master(
         }
     }
 
-    let excluded_count = auto_merge_commits.len() + rollup_merge_commits.len();
-
-    // Calculate actual commits behind (total - excluded)
-    let filtered_behind_count = total_behind_by - excluded_count as u32;
+    let merge_commits_count = auto_merge_commits.len() + rollup_merge_commits.len();
 
     log::info!(
-        "PR #{} is {} commits behind {} (excluding {} auto-merge and {} rollup commits)",
+        "PR #{} is {} commits behind {} (only including {} auto-merge and {} rollup commits)",
         event.issue.number,
-        filtered_behind_count,
+        merge_commits_count,
         repo_info.default_branch,
         auto_merge_commits.len(),
         rollup_merge_commits.len()
@@ -103,21 +144,23 @@ pub async fn behind_master(
         );
     }
 
-    // If PR is behind by at least the threshold after filtering, generate a warning
-    if filtered_behind_count >= threshold {
+    // If there are at least the threshold of merge commits, generate a warning
+    if merge_commits_count >= merge_commits_threshold as usize {
         log::info!(
-            "PR #{} is {} commits behind {} (threshold: {})",
+            "PR #{} has {} merge commits ({} auto-merge and {} rollup) behind {} (threshold: {})",
             event.issue.number,
-            filtered_behind_count,
+            merge_commits_count,
+            auto_merge_commits.len(),
+            rollup_merge_commits.len(),
             repo_info.default_branch,
-            threshold
+            merge_commits_threshold
         );
 
         return Some(format!(
-            "This PR is {} commits behind the `{}` branch (excluding {} auto-merge and {} rollup commits). \
+            "This PR is missing {} important merge commits from the `{}` branch ({} auto-merge and {} rollup commits). \
 It's recommended to update your branch according to the \
 [Rustc Dev Guide](https://rustc-dev-guide.rust-lang.org/contributing.html#keeping-your-branch-up-to-date).",
-            filtered_behind_count,
+            merge_commits_count,
             repo_info.default_branch,
             auto_merge_commits.len(),
             rollup_merge_commits.len()
